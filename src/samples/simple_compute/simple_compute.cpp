@@ -4,6 +4,10 @@
 #include <vk_buffers.h>
 #include <vk_utils.h>
 
+#include <random>
+#include <chrono>
+
+
 SimpleCompute::SimpleCompute(uint32_t a_length) : m_length(a_length)
 {
 #ifdef NDEBUG
@@ -97,11 +101,12 @@ void SimpleCompute::SetupSimplePipeline()
   // Заполнение буферов
   std::vector<float> values(m_length);
   for (uint32_t i = 0; i < values.size(); ++i) {
-    values[i] = (float)i;
+    values[i] = (float)(rand()) / (float)(RAND_MAX * RAND_MAX/1000.);
   }
+  arr = values;
   m_pCopyHelper->UpdateBuffer(m_A, 0, values.data(), sizeof(float) * values.size());
   for (uint32_t i = 0; i < values.size(); ++i) {
-    values[i] = (float)i * i;
+    values[i] = 0.;
   }
   m_pCopyHelper->UpdateBuffer(m_B, 0, values.data(), sizeof(float) * values.size());
 }
@@ -122,7 +127,7 @@ void SimpleCompute::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, VkPipeli
 
   vkCmdPushConstants(a_cmdBuff, m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(m_length), &m_length);
 
-  vkCmdDispatch(a_cmdBuff, 1, 1, 1);
+  vkCmdDispatch(a_cmdBuff, 1 + (m_length - 1) / 256, 1, 1);
 
   VK_CHECK_RESULT(vkEndCommandBuffer(a_cmdBuff));
 }
@@ -200,8 +205,45 @@ void SimpleCompute::CreateComputePipeline()
 }
 
 
-void SimpleCompute::Execute()
+std::chrono::steady_clock::time_point getCurrentTime() {
+    return std::chrono::steady_clock::now();
+}
+
+
+void printResultsNTime(double result_sum, std::chrono::high_resolution_clock::time_point start_time, std::chrono::high_resolution_clock::time_point end_time) {
+  std::cout << "Result sum - " << result_sum << "\n";
+
+  auto elapsed_time = end_time - start_time;
+  long long elapsed_milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed_time).count();
+  
+  std::cout << "Total time - " << elapsed_milliseconds << " ms\n\n";
+}
+
+float computeResultSum(std::vector<float> &arr)
 {
+  float result_sum = 0.0;
+  for (int i = 0; i < arr.size(); ++i)
+    {
+        int start = 0;
+        int end = arr.size() - 1;
+
+        if (i - 3 > start) start = i - 3;
+        if (i + 3 < end) end = i + 3;
+
+        float tmp = 0.0;
+        for (int j = start; j <= end; ++j)
+        {
+            tmp += arr[j];
+        }
+
+        result_sum += tmp / 7;
+    }
+  return result_sum;
+}
+
+
+void SimpleCompute::Execute()
+{ 
   SetupSimplePipeline();
   CreateComputePipeline();
 
@@ -217,15 +259,32 @@ void SimpleCompute::Execute()
   fenceCreateInfo.flags = 0;
   VK_CHECK_RESULT(vkCreateFence(m_device, &fenceCreateInfo, NULL, &m_fence));
 
+  std::cout << "Array values size: " << m_length << std::endl;
+  auto start_time = getCurrentTime();
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
   // Отправляем буфер команд на выполнение
   VK_CHECK_RESULT(vkQueueSubmit(m_computeQueue, 1, &submitInfo, m_fence));
 
   //Ждём конца выполнения команд
   VK_CHECK_RESULT(vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, 100000000000));
 
+  auto end_time = getCurrentTime();
+
   std::vector<float> values(m_length);
   m_pCopyHelper->ReadBuffer(m_sum, 0, values.data(), sizeof(float) * values.size());
-  for (auto v: values) {
-    std::cout << v << ' ';
+
+  float result_sum = 0.0;
+  for(auto v: values) {
+    result_sum += v;
   }
+
+  std::cout << "GPU:\n";
+  printResultsNTime(result_sum, start_time, end_time);
+
+
+  start_time = getCurrentTime();
+  result_sum = computeResultSum(arr);
+  std::cout << "CPU:\n";
+  printResultsNTime(result_sum, start_time, getCurrentTime());
 }
